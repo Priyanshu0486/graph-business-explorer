@@ -4,6 +4,18 @@ This project is a full-stack web application designed to unify fragmented busine
 
 ## Architecture Decisions
 
+```mermaid
+graph TD
+    Client[Frontend: React + Vite + React Flow]
+    Server[Backend: Spring Boot]
+    DB[(Database: PostgreSQL)]
+    LLM((LLM: Gemini 2.0 Flash))
+
+    Client -- "REST API (JSON)" <--> Server
+    Server -- "JPA (Data mapping) / JDBC (SQL queries)" <--> DB
+    Server -- "Schema Context + Prompts" <--> LLM
+```
+
 The system relies on a three-tier architecture:
 1. **Frontend:** React + Vite, using `@xyflow/react` for the customizable and interactive graph visualization.
 2. **Backend:** Spring Boot (Java 17+), exposing RESTful APIs for the graph overview, paginated entity data tables, and the LLM query pipeline.
