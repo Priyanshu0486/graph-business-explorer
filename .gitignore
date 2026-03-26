@@ -8,8 +8,7 @@ appFrontend/node_modules/
 *.iml
 .vscode/
 
-# Old Dockerfiles
-appBackend/Dockerfile
+
 
 # Env 
 .env

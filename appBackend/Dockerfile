@@ -24,7 +24,7 @@ WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
 # Copy the SAP data files for ingestion
-COPY ../sap-o2c-data ./sap-o2c-data
+COPY sap-o2c-data ./sap-o2c-data
 
 # Set the data path environment variable
 ENV APP_DATA_PATH=/app/sap-o2c-data
