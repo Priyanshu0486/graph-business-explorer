@@ -1,294 +1,70 @@
-# Graph-Based Data Modeling and Query System
+# Graph-Based Business Data Exploration System
 
-## Overview
+This project is a full-stack web application designed to unify fragmented business data (e.g., orders, deliveries, invoices, and payments) into a graph of interconnected entities. It provides a React-based UI for graph visualization and features an LLM-powered natural language chat interface to dynamically translate user questions into structured SQL queries, providing data-backed answers.
 
-This project is a submission for a Forward Deployed Engineer task.
+## Architecture Decisions
 
-The goal is to build a graph-based business data exploration system with a natural language query interface. The system should ingest structured business data, model it as a graph, visualize relationships between entities, and allow users to ask questions in natural language. The application should use an LLM to translate valid business questions into SQL, execute the query on the database, and return grounded answers based on actual data.
+The system relies on a three-tier architecture:
+1. **Frontend:** React + Vite, using `@xyflow/react` for the customizable and interactive graph visualization.
+2. **Backend:** Spring Boot (Java 17+), exposing RESTful APIs for the graph overview, paginated entity data tables, and the LLM query pipeline.
+3. **Database:** PostgreSQL. 
 
-This project should be built with **Spring Boot** for the backend because that is the preferred stack for implementation.
+The choice to use a relational database with foreign key relationships over a native graph database (like Neo4j) was driven by the inherent rectangular shape of SAP O2C data (JSONL). The relational approach makes aggregation and complex joins significantly easier, faster, and more standard for LLMs to generate queries against while still allowing us to conceptualize and visualize the data as a graph via the frontend.
 
-## What We Are Building
+## Database Mapping
 
-We are building a system with three core capabilities:
+The JSONL dataset was ingested and modeled into the following interconnected JPA entities:
+- **Business Partner:** Central node (Customer).
+- **Sales Orders:** `SalesOrderHeader` and `SalesOrderItem`.
+- **Outbound Deliveries:** `OutboundDeliveryHeader` and `OutboundDeliveryItem`.
+- **Billing Documents:** `BillingDocumentHeader` and `BillingDocumentItem`.
+- **Payments:** `PaymentAccountsReceivable`.
+- **Products:** `Product`.
 
-1. **Business Data Modeling as a Graph**
-   - Represent business entities such as customers, orders, deliveries, invoices, payments, and products as graph nodes.
-   - Represent relationships between them as graph edges.
-   - Example relationships:
-     - Customer -> Order
-     - Order -> Delivery
-     - Order -> Invoice
-     - Invoice -> Payment
-     - Order -> Product
+### Graph Structure
+- `Business Partner` **places** `Sales Orders`
+- `Sales Orders` **contains** `Sales Order Items`
+- `Sales Order Items` **reference** `Products`
+- `Sales Orders` **delivered by** `Deliveries`
+- `Sales Orders` **billed by** `Billing Documents`
+- `Billing Documents` **paid by** `Payments`
+- `Business Partner` **pays via** `Payments`
 
-2. **Graph Visualization UI**
-   - Show nodes and edges in an interactive graph.
-   - Allow users to expand nodes and inspect metadata.
-   - Support exploring relationship flows across the business process.
+## LLM Prompting Strategy
 
-3. **Natural Language Query Interface**
-   - User asks a business question in plain English.
-   - Backend sends schema-aware context to an LLM.
-   - LLM generates a safe read-only SQL query.
-   - Backend validates and executes the SQL.
-   - Query results are sent back to the LLM for grounded answer formatting.
-   - Final answer is returned to the user.
+Integrating the Gemini 2.0 Flash API to generate dynamic SQL introduces the risk of hallucination or syntax errors. 
 
-## Core User Experience
+**Context Prompting:** 
+To solve this, the LLM is primed with a highly detailed, rigid system prompt encompassing the entire PostgreSQL database schema. The prompt includes precisely mapping out primary keys, foreign keys (e.g., `sales_order_header.sold_to_party -> business_partner.customer`), and data types.
 
-The user should be able to:
-
-- explore the graph visually
-- inspect entity details and relationships
-- ask questions like:
-  - "Trace the full flow for a billing document"
-  - "Which products are associated with the highest number of billing documents?"
-  - "Find order flows where payment is missing after invoice generation"
-- receive answers that are backed by data from the database
-
-## Target Architecture
-
-### Backend
-
-The backend should be built using **Spring Boot**.
-
-Suggested responsibilities:
-
-- ingest the dataset into a relational database
-- expose APIs for graph data
-- expose APIs for chat-based natural language querying
-- call the LLM for SQL generation and answer formatting
-- validate generated SQL before execution
-- reject unrelated or unsafe prompts
-
-### Database
-
-Use a relational database as the source of truth.
-
-Recommended options:
-
-- **PostgreSQL** for a stronger production-style implementation
-- **H2/SQLite** only if a faster local MVP is needed
-
-Use:
-
-- **Spring Data JPA** for entity modeling and standard access
-- **JdbcTemplate** for executing LLM-generated SQL safely
-
-### Frontend
-
-Frontend can be a lightweight web app, ideally React-based.
-
-Suggested UI layout:
-
-- graph panel for node/edge visualization
-- chat panel for natural language questions
-- optional node highlighting based on query results
-
-## Suggested Domain Model
-
-Potential core entities:
-
-- Customer
-- Order
-- OrderItem
-- Product
-- Delivery
-- Invoice
-- Payment
-
-Potential graph relationships:
-
-- Customer -> Order
-- Order -> OrderItem
-- OrderItem -> Product
-- Order -> Delivery
-- Order -> Invoice
-- Invoice -> Payment
-
-## NL to SQL Workflow
-
-The chat system should follow this pipeline:
-
-1. User submits a question.
-2. Backend checks whether the question is relevant to the business dataset.
-3. Backend builds a prompt containing:
-   - database schema
-   - table relationships
-   - guardrail instructions
-   - the user question
-4. LLM generates SQL.
-5. Backend validates the SQL.
-6. Backend executes SQL against the database.
-7. Backend sends results to the LLM for response formatting.
-8. User receives a grounded natural language answer.
-
-## SQL Safety Requirements
-
-Generated SQL must be restricted.
-
-Allowed:
-
-- `SELECT` queries only
-- known tables only
-- known columns only if feasible to enforce
-
-Not allowed:
-
-- `INSERT`
-- `UPDATE`
-- `DELETE`
-- `DROP`
-- `ALTER`
-- multi-statement SQL
-- unrelated data access
-
-The backend should reject unsafe SQL before execution.
+**Temperature Control:**
+The API is called with a temperature of `0.1` to force deterministic, logic-based responses rather than creative text generation. The LLM is explicitly instructed to only output raw SQL query text based on the schema matching the user's natural language question.
 
 ## Guardrails
 
-The chatbot must reject prompts that are outside the scope of the dataset.
+To prevent the LLM from executing destructive queries (SQL Injection) or answering out-of-scope questions, a strict `SqlValidationService` acts as a middleware in the process:
 
-Examples of prompts to reject:
+1. **Read-Only Enforcement:** The LLM's raw SQL output is intercepted. If it contains any DML or DDL keywords (e.g., `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`), the system actively blocks execution.
+2. **Whitelist Pattern:** The system aggressively ensures the query strictly begins with `SELECT`.
+3. **Out-of-Scope Rejection:** As per the instructions in the prompt, if the user asks a general knowledge or creative question completely disjoint from the provided SAP O2C schema, the system will reject it with: `"This system is designed to answer questions related to the provided dataset only."`
+4. **Statement Boundaries:** The validator looks for semicolons to prevent multi-statement injection vulnerabilities.
 
-- general knowledge questions
-- creative writing requests
-- coding help requests
-- personal advice
-- any question not grounded in the available business data
+## How to Run Locally
 
-Expected rejection style:
+### Prerequisites
+- JDK 17+
+- Node.js
+- PostgreSQL running on port 5433 (or update `application.properties`)
+- Gemini API Key
 
-- brief
-- polite
-- clear that the system only answers questions about the uploaded dataset/business graph
+### Backend Setup
+1. Define your environment variable: `export GEMINI_API_KEY=your_key_here`
+2. Navigate to `appBackend`
+3. Run `mvn spring-boot:run`
+*Note: The application will automatically ingest the JSONL files from `../sap-o2c-data` on initial startup.*
 
-## API Ideas
-
-Suggested backend endpoints:
-
-- `GET /api/graph`
-  - returns graph nodes and edges
-
-- `GET /api/graph/node/{id}`
-  - returns detailed metadata for a node
-
-- `POST /api/chat/query`
-  - accepts a user question
-  - returns generated SQL, result rows if needed, and final formatted answer
-
-- `GET /api/schema`
-  - optional endpoint for debugging schema context
-
-## Suggested Spring Boot Package Structure
-
-```text
-src/main/java/com/example/graphquerysystem
-  controller/
-  service/
-  repository/
-  entity/
-  dto/
-  config/
-  util/
-```
-
-Suggested services:
-
-- `GraphService`
-- `GraphQueryService`
-- `LlmService`
-- `SchemaContextService`
-- `SqlGenerationService`
-- `SqlValidationService`
-- `QueryExecutionService`
-- `AnswerFormattingService`
-
-Suggested controllers:
-
-- `GraphController`
-- `ChatController`
-
-## Implementation Priorities
-
-Build in this order:
-
-1. Create Spring Boot project structure
-2. Define relational schema and load dataset
-3. Build entity and repository layer
-4. Expose graph data APIs
-5. Build graph visualization frontend
-6. Add natural language query API
-7. Integrate LLM-based SQL generation
-8. Add SQL validation and guardrails
-9. Format grounded answers
-10. Polish demo and README
-
-## Bonus Features
-
-If time permits, add:
-
-- streaming LLM responses
-- chat memory for follow-up questions
-- graph clustering/grouping
-- semantic search over node metadata
-- automatic graph node highlighting from query results
-
-## Submission Expectations
-
-The final submission should include:
-
-- working demo
-- public GitHub repository
-- clear README
-- architecture explanation
-- database choice rationale
-- prompting strategy
-- guardrail design
-- AI coding logs or transcripts showing how AI tools were used
-
-## Notes for AI Coding Assistants
-
-Use this README as the primary project brief.
-
-Important expectations:
-
-- keep the backend in Spring Boot
-- prefer a practical MVP over an over-engineered design
-- model the business data relationally, then expose graph-shaped APIs
-- ensure the LLM never executes raw SQL without validation
-- all answers must be grounded in the actual dataset
-- prioritize speed of delivery, clarity of architecture, and demo reliability
-
-When generating code, prefer:
-
-- clear package boundaries
-- DTO-based APIs
-- service-oriented backend structure
-- safe SQL execution patterns
-- simple, demo-friendly frontend integration
-
-## Current Direction
-
-Current preferred stack:
-
-- Backend: Spring Boot
-- Database: PostgreSQL preferred
-- Data access: Spring Data JPA + JdbcTemplate
-- Frontend: React
-- Graph UI: React Flow or Cytoscape
-- LLM integration: to be configured based on selected provider
-
-## Definition of Done
-
-This project is complete when:
-
-- business data is loaded into the database
-- graph nodes and edges can be fetched and visualized
-- user can ask valid business questions in natural language
-- system converts the question to safe SQL
-- SQL executes successfully
-- answer is returned based on real data
-- off-topic prompts are rejected
-- demo is stable enough to present
+### Frontend Setup
+1. Navigate to `appFrontend`
+2. Run `npm install`
+3. Run `npm run dev`
+4. Access the dashboard via your browser.
