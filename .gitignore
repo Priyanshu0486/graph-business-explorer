@@ -8,8 +8,8 @@ appFrontend/node_modules/
 *.iml
 .vscode/
 
-# Data directories (Large files)
-sap-o2c-data/
+# Old Dockerfiles
+appBackend/Dockerfile
 
 # Env 
 .env

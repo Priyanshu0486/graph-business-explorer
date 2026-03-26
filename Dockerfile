@@ -5,11 +5,11 @@ FROM maven:3.9.6-eclipse-temurin-21 AS build
 WORKDIR /app
 
 # Copy the pom.xml and download project dependencies
-COPY pom.xml .
+COPY appBackend/pom.xml .
 RUN mvn dependency:go-offline
 
 # Copy the project source code
-COPY src ./src
+COPY appBackend/src ./src
 
 # Package the application
 RUN mvn clean package -DskipTests
@@ -24,7 +24,7 @@ WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
 # Copy the SAP data files for ingestion
-COPY ../sap-o2c-data ./sap-o2c-data
+COPY sap-o2c-data ./sap-o2c-data
 
 # Set the data path environment variable
 ENV APP_DATA_PATH=/app/sap-o2c-data
